@@ -4,19 +4,21 @@ Created on Fri Jan  8 10:50:11 2021
 @author: Gebruiker
 """
 
+import datetime
+from typing import Iterable
+import locale
+
 import requests
 from bs4 import BeautifulSoup
-import datetime
-
 import pandas as pd
-from typing import Iterable
+import numpy as np
 
 
 class WikipediaTableExtractor:
-    
+
     def __init__(self, link: str,
-                 single_link_columns: Iterable[int] = (,),
-                 multiple_link_columns: Iterable[int] = (,),
+                 single_link_columns: Iterable[int] = None,
+                 multiple_link_columns: Iterable[int] = None,
                  attrs: dict = None,
                  table_index: int = 0,
                  ):
@@ -43,13 +45,13 @@ class WikipediaTableExtractor:
 
         '''
         self.link = link
-        self.single_link_columns = single_link_columns
-        self.multiple_link_columns = multiple_link_columns
+        self.single_link_columns = single_link_columns or []
+        self.multiple_link_columns = multiple_link_columns or []
         self.attrs = attrs
         self.table_index = table_index
         self.table = None
         self.dataframe = None
-    
+
     def get_html_soup(self):
         response = requests.get(self.link)
         html = response.content
@@ -57,13 +59,12 @@ class WikipediaTableExtractor:
         for br in soup.find_all("br"):
             br.replace_with(", " + br.text)
 
-        # html = html.replace('<br>', ', ')
         return soup
-    
+
     def read_df(self):
         '''
         Reads the table as a pandas dataframe
-        
+
         Returns
         -------
         None.
@@ -71,7 +72,7 @@ class WikipediaTableExtractor:
         '''
         soup = self.get_html_soup()
         self.dataframe = pd.read_html(str(soup), attrs=self.attrs)[self.table_index]
-    
+
     def find_table(self):
         '''
         Find the soup of the table
@@ -85,7 +86,7 @@ class WikipediaTableExtractor:
         # soup = BeautifulSoup(html, 'html.parser')
         table = soup.findAll('table', attrs=self.attrs)[self.table_index]
         self.table = table
-        
+
     def find_wikipedia_links(self):
         '''
         Return dictionary with extra columns for each column containing links
@@ -97,9 +98,12 @@ class WikipediaTableExtractor:
         if self.table is None:
             self.find_table()
 
-        data = {i: [] for i in self.single_link_columns + self.multiple_link_columns}       
+        data = {i: [] for i in self.single_link_columns + self.multiple_link_columns}
         for tablerow in self.table.findAll("tr"):
             cells = tablerow.findAll("td")
+            if not cells:  # header
+                continue
+            
             for i in self.single_link_columns:
                 try:
                     cell = cells[i]
@@ -107,7 +111,7 @@ class WikipediaTableExtractor:
                     data[i].append(None)
                     continue
                 try:
-                    data[i].append(cell.find('a')['href']) 
+                    data[i].append(cell.find('a')['href'])
                 except TypeError:
                     data[i].append(None)
             for i in self.multiple_link_columns:
@@ -121,17 +125,17 @@ class WikipediaTableExtractor:
                 except TypeError:
                     info = None
                 data[i].append(info)
-         
+
         columnnames_dict = self.find_correct_columnnames()
         for i, column_name in columnnames_dict.items():
             data[column_name] = data.pop(i)
-        
+
         return data
-    
+
     def find_correct_columnnames(self):
         '''
         Rename new link columns from column index to a readable human name
-        
+
         Append "Link" to columns which contain only a single link
         Append "Links" to columns which contain multiple links
 
@@ -150,7 +154,7 @@ class WikipediaTableExtractor:
         for i in self.multiple_link_columns:
             rename_dict[i] = str(self.dataframe.columns[i]) + 'Links'
         return rename_dict
-            
+
     def extract_table_as_dataframe(self):
         '''
         Reads table with extra columns
@@ -162,36 +166,38 @@ class WikipediaTableExtractor:
         '''
         if self.dataframe is None:
             self.read_df()
-        
+
         links_data = self.find_wikipedia_links()
         columnnames_dict = self.find_correct_columnnames()
-        
+
         df_links = pd.DataFrame(links_data)
         df = pd.concat([self.dataframe, df_links], axis='columns')
         return df
 
-#%%%
+
 class Top2000Cleaner:
     def __init__(self, data: pd.DataFrame):
+        locale.setlocale(locale.LC_TIME, 'nl_NL.utf8') # We download from dutch wikipedia, so we need dutch month names
+
         self.data = data
         self._validate()
-    
+
     def _check_column_completeness(self):
         current_year = datetime.datetime.now().year
         columns_should_be_present = ['Artiest', 'Titel', 'Jaar', 'HP', 'TitelLink', 'ArtiestLinks']
         columns_should_be_present += [str(i%100).zfill(2) for i in range(1999, current_year) ]
         assert all(col in self.data.columns for col in columns_should_be_present)
-        
     def _validate(self):
-        self.check_column_completeness()
-        
+        assert self.data.notnull().all().all()
+        self._check_column_completeness()
     def rename_columns(self):
-        self.data = self.data.rename({'Titel': 'Title', 
-                                       'Artiest': 'Artist',
-                                       'Jaar': 'YearMade',
-                                       'TitelLink': 'TitleLink',
-                                       'ArtiestLinks': 'ArtistLinks',
-                                       })
+        column_rename =  {'Titel': 'Title',
+                          'Artiest': 'Artist',
+                          'Jaar': 'YearMade',
+                          'TitelLink': 'TitleLink',
+                          'ArtiestLinks': 'ArtistLinks',
+                          }
+        self.data = self.data.rename(columns = column_rename)
     def split_into_model(self):
         '''
         Split data into tables according to data model
@@ -202,11 +208,11 @@ class Top2000Cleaner:
                                )
         self.notering = self.data[['SongID'] + [col for col in self.data.columns if col.isnumeric()]]
         self.song = self.data.set_index('SongID')[['Title', 'YearMade', 'TitleLink']]
-        
-        exploded = self.data.explode('ArtistInfo')
-        exploded[['Name', 'ArtistLink']] = pd.DataFrame(exploded['ArtistInfo'].tolist(), index=exploded.index)
+
+        exploded = self.data.explode('ArtistLinks')
+        exploded[['Name', 'ArtistLink']] = pd.DataFrame(exploded['ArtistLinks'].tolist(), index=exploded.index)
         exploded['ArtistID'] = exploded['ArtistLink'].apply(hash)
-        
+
         self.songartist = exploded[['SongID', 'ArtistID']].set_index(['SongID', 'ArtistID']).copy()
         self.artist = (exploded.set_index('ArtistID')[['Name', 'ArtistLink']]
                       .assign(ArtistLink = lambda df: 'https://nl.wikipedia.org' + df['ArtistLink'])
@@ -221,24 +227,70 @@ class Top2000Cleaner:
                                                                 .add(2000)
                                                                 .mask(lambda s: s.ge(2050),
                                                                       lambda s: s.sub(100))
-                                                                )
+                                                                ),
                                              Rank = lambda df: pd.to_numeric(df['Rank'],
                                                                              errors='coerce',
                                                                              downcast='integer')
                                              )
+                                     .dropna()
                                      )
-        
+
     def validate_notering(self):
-        assert (self.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()
-    
+        assert (self.notering.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()
+
     def clean_song(self):
-        self.song = (self.song.rename(columns={'SongLink': 'Link'})
+        self.song = (self.song.rename(columns={'TitleLink': 'Link'})
                           .assign(Link = lambda df: 'https://nl.wikipedia.org' + df['Link'])
                     )
 
     def clean(self):
+        self.rename_columns()
         self.split_into_model()
         self.clean_notering()
         self.validate_notering()
         self.clean_song()
         return self.notering, self.song, self.songartist, self.artist
+
+class InfoboxReader:
+    def __init__(self, link, allow_errors=False):
+        self.link = link
+        self.details = None
+        self.allow_errors = allow_errors
+    
+    def download(self):
+        reader = readtop2000.WikipediaTableExtractor(link, [1], attrs={'class': 'infobox'})
+        try:
+            artist_details = reader.extract_table_as_dataframe()
+        except ValueError as e:  # No table found
+            if self.allow_errors:
+                self.details = pd.DataFrame()
+                return self.details
+            raise e
+        assert artist_details.columns.tolist() == [0, 1, 2, '1Link']
+        self.details = artist_details
+    
+    def clean(self):
+        if self.details is None:
+            self.download()
+        elif self.details.empty:
+            return self.details
+        self.details = (self.details.rename(columns={0: 'Variable', 1: 'Value', 2: 'Extra'})
+                                    # Fill nans so we can check whether Value and Extra are indeed identical as expected
+                                    .assign(Variable = lambda df: df['Variable'].fillna(''),
+                                            Value = lambda df: df['Value'].fillna(''),
+                                            Extra = lambda df: df['Extra'].fillna('')
+                                            )
+                                     .iloc[:-1]  # Drop Portaal information
+                        )
+        assert (self.details['Value'] == self.details['Extra']).all()
+        self.details = (self.details.drop(columns=['Extra'])  # Drop headers
+                                    .assign(Header = lambda df: pd.Series(np.where(df['Variable'] == df['Value'], df['Variable'], None)).ffill(),
+                                            OriginalLink = self.link
+                                           )
+                                      .loc[lambda df: df['Variable'] != df['Value']]
+                                 )
+    
+    def read(self):
+        self.download()
+        self.clean()
+        return self.details
