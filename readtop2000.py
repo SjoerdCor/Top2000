@@ -211,6 +211,9 @@ class Top2000Cleaner:
 
         exploded = self.data.explode('ArtistLinks')
         exploded[['Name', 'ArtistLink']] = pd.DataFrame(exploded['ArtistLinks'].tolist(), index=exploded.index)
+        
+        # We hash on ArtistLink because names can be doubly used 
+        # e.g. Nena as band and singer, Mr. Big is the name of two different bands
         exploded['ArtistID'] = exploded['ArtistLink'].apply(hash)
 
         self.songartist = exploded[['SongID', 'ArtistID']].set_index(['SongID', 'ArtistID']).copy()
@@ -258,7 +261,7 @@ class InfoboxReader:
         self.allow_errors = allow_errors
     
     def download(self):
-        reader = readtop2000.WikipediaTableExtractor(link, [1], attrs={'class': 'infobox'})
+        reader = WikipediaTableExtractor(self.link, [1], attrs={'class': 'infobox'})
         try:
             artist_details = reader.extract_table_as_dataframe()
         except ValueError as e:  # No table found
