@@ -240,6 +240,9 @@ class Top2000Cleaner:
 
     def validate_notering(self):
         assert (self.notering.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()
+        assert self.notering['Year'].ge(self.notering['YearMade']).all()
+        assert self.notering.groupby(['Title', 'Artist'])['YearMade'].nunique().eq(1).all()
+        
 
     def clean_song(self):
         self.song = (self.song.rename(columns={'TitleLink': 'Link'})
