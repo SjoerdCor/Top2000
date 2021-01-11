@@ -239,34 +239,19 @@ class Top2000Cleaner:
                                      )
 
     def validate_notering(self):
-        assert (self.notering.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()
-        assert self.notering['Year'].ge(self.notering['YearMade']).all()
-        assert self.notering.groupby(['Title', 'Artist'])['YearMade'].nunique().eq(1).all()
-        
+        assert (self.notering.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()        
 
     def clean_song(self):
         self.song = (self.song.rename(columns={'TitleLink': 'Link'})
                           .assign(Link = lambda df: 'https://nl.wikipedia.org' + df['Link'])
                     )
-    
-    def clean_artist(self):
-        # We download from dutch wikipedia, so we need dutch month names
-        locale.setlocale(locale.LC_TIME, 'nl_NL.utf8') 
-        self.arist = self.artist.assign(Overleden = lambda df: pd.to_datetime(df['Overleden'],
-                                                                              errors='coerce',
-                                                                              format='%d %B %Y',
-                                                                              exact=False)
-                                        )
-
-
-    
+        
     def clean(self):
         self.rename_columns()
         self.split_into_model()
         self.clean_notering()
         self.validate_notering()
         self.clean_song()
-        self.clean_artist()
         return self.notering, self.song, self.songartist, self.artist
 
 class InfoboxReader:
