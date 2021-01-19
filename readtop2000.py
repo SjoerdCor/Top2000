@@ -4,15 +4,19 @@ Created on Fri Jan  8 10:50:11 2021
 @author: Gebruiker
 """
 
+import os
 import datetime
 from typing import Iterable
 import locale
+
 
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
+import tqdm
 
+URL_TOP2000_HISTORY = 'https://nl.wikipedia.org/wiki/Lijst_van_Radio_2-Top_2000%27s'
 
 class WikipediaTableExtractor:
 
@@ -168,7 +172,6 @@ class WikipediaTableExtractor:
             self.read_df()
 
         links_data = self.find_wikipedia_links()
-        columnnames_dict = self.find_correct_columnnames()
 
         df_links = pd.DataFrame(links_data)
         df = pd.concat([self.dataframe, df_links], axis='columns')
@@ -271,6 +274,7 @@ class InfoboxReader:
             raise e
         assert artist_details.columns.tolist() == [0, 1, 2, '1Link']
         self.details = artist_details
+        return self.details
     
     def clean(self):
         if self.details is None:
@@ -297,3 +301,79 @@ class InfoboxReader:
         self.download()
         self.clean()
         return self.details
+
+
+class Top2000Downloader:
+    ignored_artists = ['Anita Garbo',  # Wikipedia redirects to her song, instead of a page about her as an artist
+                       'Space Monkey',  # Wikipedia does have an infobox, but it is about their song, not about them as an artist
+                      ]
+    
+    def _read_full_list(self):
+        fulllist_reader = WikipediaTableExtractor(URL_TOP2000_HISTORY, [1], [0])
+        df = fulllist_reader.extract_table_as_dataframe()
+        return df
+    
+    def _clean(self, df):
+        cleaner = Top2000Cleaner(df)
+        notering, song, songartist, artist = cleaner.clean()
+        return notering, song, songartist, artist
+    
+    def _download_infobox_details(self, links):
+        result = []
+        for link in tqdm.tqdm(links):
+            info = InfoboxReader(link, allow_errors=True).read()
+            result.append(info)
+        return pd.concat(result)
+    
+    def _add_detailed_information(self, artist):
+        links = artist.loc[~artist['Name'].isin(self.ignored_artists), 'Link']
+        artist_details = self._download_infobox_details(links)
+        
+        # We download from dutch wikipedia, so we need dutch month names
+        locale.setlocale(locale.LC_TIME, 'nl_NL.utf8')
+        
+        # The band members are much harder to handle because of all the functions they can have: it gives a many-to-many relation for members and bands
+        # So we ignore those. The same goes vice versa for the member pages in which it is discussed in what bands they were active
+        extra_artist_details = (artist_details[~artist_details['Header'].isin(['Leden', 'Oud-leden', 'Bezetting'])
+                                               & ~artist_details['Header'].str.startswith('Actief')]  
+                                .set_index(['OriginalLink', 'Variable'])['Value'].unstack()
+                                .assign(
+                                        )
+
+                               )
+        artist_full = artist.merge(extra_artist_details, left_on='Link', right_index=True, how='left')
+        return artist_full
+    
+    def _artist_feature_engineering(self, artist):
+        def wikipedia_datetime_to_datetime(series):
+            return pd.to_datetime(series, errors='coerce', format='%d %B %Y', exact=False)
+
+        columns_possible_country_of_birth = ['Oorsprong',
+                                     'Land',
+                                     'Land van oorsprong',
+                                     'Geboorteland',
+                                     'Geboorteplaats',
+                                     'Nationaliteit'
+                                    ]
+        artist = (artist.assign(
+                                Overlijdensdatum = lambda df: wikipedia_datetime_to_datetime(df['Overleden']),
+                                Geboortedatum = lambda df: wikipedia_datetime_to_datetime(df['Geboren']),
+                                AgePassing = lambda df: df['Overlijdensdatum'].sub(df['Geboortedatum']).dt.days.div(365.25),
+                                IsDutch = lambda df: (df[columns_possible_country_of_birth]
+                                                      .apply(lambda c: c.str.lower().str.contains('nederland')).any('columns')
+                                                     ),
+                               )
+                  )
+        return artist
+                  
+    def download_and_write(self):
+        notering, song, songartist, artist = self._read_full_list().pipe(self._clean)
+        artist = self._add_detailed_information(artist).pipe(self._artist_feature_engineering)
+        
+        tables = {'notering': notering,
+                  'song': song,
+                  'songartist': songartist,
+                  'artist': artist,
+                 }
+        for name, table in tables.items():
+            table.to_parquet(os.path.join('Data', f'{name}.parquet'))
