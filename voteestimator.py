@@ -9,6 +9,7 @@ class VotesEstimator:
     def __init__(self, nr_songs=3000):
         self.position_votes = {}
         self.total_votes = sum(self.votes_per_position(nr) for nr in range(1, nr_songs))
+        self.lower_than_2000 = 0.5 * self.percentage_of_votes(2000)
 
     def votes_per_position(self, position):
         try:
