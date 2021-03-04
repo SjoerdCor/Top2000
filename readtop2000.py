@@ -40,6 +40,9 @@ class WikipediaTableExtractor:
             index(es) for columns that (may) contain multiple wikipedia links
             these columns are put into tuples of length 2, with the first
             element being the text for each link and the second being the underlying link
+        attrs : dict
+            passed to BeautifulSoup: dictionary of attributes that you can pass
+            to use to identify the table in the HTML
         table_index : int
             Which table from wikipedia to use
 
