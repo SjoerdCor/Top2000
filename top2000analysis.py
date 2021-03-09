@@ -14,7 +14,8 @@ class AnalysisSetCreator:
     def __init__(self, votesmodel='Meindertsma'):
 
         votesmodels = {'Meindertsma': voteestimator.MeindertsmaVotesEstimator(),
-                      'Exponential': voteestimator.ExponentialVotesEstimator()
+                      'Exponential': voteestimator.ExponentialVotesEstimator(),
+                      'Linear': voteestimator.LinearVotesEstimator(),
                       }
         self.votesmodel = votesmodels[votesmodel]
 
@@ -22,13 +23,14 @@ class AnalysisSetCreator:
         self.notering = pd.read_parquet(os.path.join(filefolder, 'notering.parquet'))
         self.song = pd.read_parquet(os.path.join(filefolder, 'song.parquet'))
         self.songartist = pd.read_parquet(os.path.join(filefolder, 'songartist.parquet'))
-        self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')) # TODO: This should not happen here
-                          .pipe(self._artist_features)
+        self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')) 
+                          .pipe(self._artist_features) # TODO: This should not happen here
                         )
 
         df = (self.notering.merge(self.song, left_on='SongID', right_index=True)
                            .merge(self.songartist.reset_index())
-                           .merge(self.artist, left_on='ArtistID', right_index=True, suffixes=('Song', 'Artist'))
+                           .merge(self.artist, left_on='ArtistID', right_index=True,
+                                  suffixes=('Song', 'Artist'))
              )
         return df
 
@@ -54,8 +56,10 @@ class AnalysisSetCreator:
                                       .reset_index()
                                      )
 
-        passed_away_during_top2000 = (pd.merge_asof(passed_away_during_top2000, top2000_stemperiodes,
-                                                   left_on='Overlijdensdatum', right_on='EindeStemperiode',
+        passed_away_during_top2000 = (pd.merge_asof(passed_away_during_top2000,
+                                                    top2000_stemperiodes,
+                                                   left_on='Overlijdensdatum',
+                                                   right_on='EindeStemperiode',
                                                    direction='forward')
                                      .set_index('ArtistID')
                                      )
@@ -68,7 +72,9 @@ class AnalysisSetCreator:
         df = (df
                 .pipe(self._check_passed_away_during_top2000, einde_stemperiode)
                 .pipe(self._find_next_top2000_after_death, einde_stemperiode)
-                .assign(AgePassing = lambda df: df['Overlijdensdatum'].sub(df['Geboortedatum']).dt.days / 365.25,
+                .assign(AgePassing = lambda df: (df['Overlijdensdatum']
+                                                 .sub(df['Geboortedatum']).dt.days
+                                                 .div(365.25)),
                         PassingTooEarly = lambda df: df['AgePassing'].sub(80).mul(-1).clip(lower=0),
                         IsDutch = lambda df: df['IsDutch'].astype(int),
                         )
@@ -158,7 +164,7 @@ class AnalysisSetCreator:
                             )
                         .join(self.artist[columns])
                         .assign(DaysToStemperiode = lambda df: (df['Overlijdensdatum']
-                                                                .sub(df['EindeStemperiode']).dt.days,)
+                                                                .sub(df['EindeStemperiode']).dt.days),
                                 YearsSinceLastHit = lambda df: df['JaarTop2000'].sub(df['YearMade']),
                                 LogPopularity = lambda df: np.log10(df['PctVotesBeforeDeath']),
                                 LogPopularityNorm = lambda df: (df['LogPopularity']
@@ -219,8 +225,8 @@ class BoostExplainer:
         return effects
     
     
-    def all_effects(self, song, difference=False):
-        song = self._get_song(song)
+    def all_effects(self, song_idx, difference=False, idata=None):
+        song = self._get_song(song_idx)
         effects_artist = self._calculate_artist_effect(song)
         effects_song = self._calculate_song_effects(song)
         effects = (pd.concat([pd.concat({'Artist': pd.Series(effects_artist)}),
@@ -230,7 +236,7 @@ class BoostExplainer:
                   )
         if difference:
             effects.loc[('Prediction', ''), 'EffectSize'] = 1
-            effects.loc[('FinalDifference', ''), 'EffectSize'] = self.get_factor_off(song_pos)
+            effects.loc[('FinalDifference', ''), 'EffectSize'] = self.get_factor_off(song_idx, idata)
         return effects
     
     def _calculate_song_effects(self, song):
@@ -271,8 +277,8 @@ class BoostExplainer:
         print('')
         print(f'The actual boost was {song.loc["BoostSong"]:.2f}')
     
-    def get_factor_off(self, song):
-        boost = np.exp(multilevel_noncentered_model_idata.observed_data['y_like'].values[song])
+    def get_factor_off(self, song, idata):
+        boost = np.exp(idata.observed_data['y_like'].values[song])
         predicted_boost = self.all_effects(song)['EffectSize'].prod()
         factor = boost / predicted_boost
         return factor

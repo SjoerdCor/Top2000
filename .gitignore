@@ -126,3 +126,5 @@ dmypy.json
 *.jpg
 test.py
 *.png
+SensitivityAnalysis.ipynb
+GenreClustering.ipynb

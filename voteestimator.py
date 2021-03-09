@@ -24,7 +24,8 @@ class VotesEstimator:
 
 class MeindertsmaVotesEstimator(VotesEstimator):
     """
-    Calculate the number of votes at a certain position of the Top 2000 according to a model developed by Peter Meindertsma
+    Calculate the number of votes at a certain position of the Top 2000 according to
+    a model developed by Peter Meindertsma
 
     Source: https://www.petermeindertsma.nl/blog/benadering-aantal-stemmen-per-liedje-in-de-top-2000-van-2014/
     """
@@ -52,3 +53,18 @@ class ExponentialVotesEstimator(VotesEstimator):
 
         nr_votes = self.votes_first_place / (position ** self.rho)
         return nr_votes
+    
+class LinearVotesEstimator(VotesEstimator):
+    """
+    position 1 -> 2000 points, 2 --> 1999 points ... 2000 -> 1 point
+    
+    This does not really estimate the percentage of votes, but the advantage is
+    it does not need a model and is directly measur -`able
+    """
+    def __init__(self, votes_first_place=10000, votes_place_2000=150):
+        self.a = (votes_place_2000 - votes_first_place) / 1999
+        self.b = votes_first_place + self.a
+        super().__init__()
+
+    def _calculate_position_votes(self, position):
+        return self.b - self.a * position

@@ -184,7 +184,6 @@ class WikipediaTableExtractor:
 class Top2000Cleaner:
     def __init__(self, data: pd.DataFrame):
         locale.setlocale(locale.LC_TIME, 'nl_NL.utf8') # We download from dutch wikipedia, so we need dutch month names
-
         self.data = data
         self._validate()
 
@@ -294,7 +293,8 @@ class InfoboxReader:
                         )
         assert (self.details['Value'] == self.details['Extra']).all()
         self.details = (self.details.drop(columns=['Extra'])  # Drop headers
-                                    .assign(Header = lambda df: pd.Series(np.where(df['Variable'] == df['Value'], df['Variable'], None)).ffill(),
+                                    .assign(Header = lambda df: pd.Series(np.where(df['Variable'] == df['Value'],
+                                                                                   df['Variable'], None)).ffill(),
                                             OriginalLink = self.link
                                            )
                                       .loc[lambda df: df['Variable'] != df['Value']]
@@ -307,8 +307,11 @@ class InfoboxReader:
 
 
 class Top2000Downloader:
-    ignored_artists = ['Anita Garbo',  # Wikipedia redirects to her song, instead of a page about her as an artist
-                       'Space Monkey',  # Wikipedia does have an infobox, but it is about their song, not about them as an artist
+    # Wikipedia redirects Anita Garbo to her song, instead of a page about her as an artist
+    # Wikipedia does have an infobox for Space Monkey, but it is about their song, not about them as an artist
+    ignored_artists = ['Anita Garbo',  
+                       
+                       'Space Monkey',  
                       ]
     
     def _read_full_list(self):
@@ -335,8 +338,10 @@ class Top2000Downloader:
         # We download from dutch wikipedia, so we need dutch month names
         locale.setlocale(locale.LC_TIME, 'nl_NL.utf8')
         
-        # The band members are much harder to handle because of all the functions they can have: it gives a many-to-many relation for members and bands
-        # So we ignore those. The same goes vice versa for the member pages in which it is discussed in what bands they were active
+        # The band members are much harder to handle because of all the functions they can have:
+        # it gives a many-to-many relation for members and bands
+        # So we ignore those. The same goes vice versa for the member pages in which it is discussed
+        # in what bands they were active
         extra_artist_details = (artist_details[~artist_details['Header'].isin(['Leden', 'Oud-leden', 'Bezetting'])
                                                & ~artist_details['Header'].str.startswith('Actief')]  
                                 .set_index(['OriginalLink', 'Variable'])['Value'].unstack()
@@ -361,9 +366,12 @@ class Top2000Downloader:
         artist = (artist.assign(
                                 Overlijdensdatum = lambda df: wikipedia_datetime_to_datetime(df['Overleden']),
                                 Geboortedatum = lambda df: wikipedia_datetime_to_datetime(df['Geboren']),
-                                AgePassing = lambda df: df['Overlijdensdatum'].sub(df['Geboortedatum']).dt.days.div(365.25),
+                                AgePassing = lambda df: (df['Overlijdensdatum']
+                                                         .sub(df['Geboortedatum']).dt.days
+                                                         .div(365.25)),
                                 IsDutch = lambda df: (df[columns_possible_country_of_birth]
-                                                      .apply(lambda c: c.str.lower().str.contains('nederland')).any('columns')
+                                                      .apply(lambda c: c.str.lower()
+                                                             .str.contains('nederland')).any('columns')
                                                      ),
                                )
                   )
