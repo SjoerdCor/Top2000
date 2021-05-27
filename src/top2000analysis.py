@@ -20,17 +20,17 @@ class AnalysisSetCreator:
         self.votesmodel = votesmodels[votesmodel]
 
     def _combine_data(self, filefolder):
-        self.notering = pd.read_parquet(os.path.join(filefolder, 'ranking.parquet'))
+        self.ranking = pd.read_parquet(os.path.join(filefolder, 'ranking.parquet'))
         self.song = pd.read_parquet(os.path.join(filefolder, 'song.parquet'))
         self.songartist = pd.read_parquet(os.path.join(filefolder, 'songartist.parquet'))
         self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')) 
                           .pipe(self._artist_features, filefolder=filefolder) # TODO: This should not happen here
                         )
 
-        df = (self.notering.merge(self.song, left_on='SongID', right_index=True)
-                           .merge(self.songartist.reset_index())
-                           .merge(self.artist, left_on='ArtistID', right_index=True,
-                                  suffixes=('Song', 'Artist'))
+        df = (self.ranking.merge(self.song, left_on='SongID', right_index=True)
+                          .merge(self.songartist.reset_index())
+                          .merge(self.artist, left_on='ArtistID', right_index=True,
+                                 suffixes=('Song', 'Artist'))
              )
         return df
 
@@ -70,8 +70,7 @@ class AnalysisSetCreator:
 
     def _artist_features(self, df, filefolder='Data'):
         einde_stemperiode = self._read_stemperiodes(filefolder)
-        df = (df
-                .pipe(self._check_passed_away_during_top2000, einde_stemperiode)
+        df = (df.pipe(self._check_passed_away_during_top2000, einde_stemperiode)
                 .pipe(self._find_next_top2000_after_death, einde_stemperiode)
                 .assign(AgePassing = lambda df: (df['Overlijdensdatum']
                                                  .sub(df['Geboortedatum']).dt.days
@@ -81,10 +80,6 @@ class AnalysisSetCreator:
                         )
              )
         return df
-
-    def _rank_features(self, df):
-        return df.assign(PctVotes = lambda df: df['Rank'].apply(self.votesmodel.percentage_of_votes))
-
 
     def _normalize_by_years_before_death(self, df, years_to_normalize=1):
         mi = pd.MultiIndex.from_product([df.query('IsOverleden')['SongID'].unique(),
@@ -107,18 +102,25 @@ class AnalysisSetCreator:
                              .loc[:, range(-years_to_normalize, 0)]
                              .mean(axis='columns')
                              .rename('PctVotesBeforeDeath')
-                             .reset_index()
                              )
 
-        df = df.merge(votes_before_death, how='left')
+        df = df.merge(votes_before_death, right_index=True, how='left', validate='many_to_one')
         return df
-
+    def _add_rank_last_year(self, df):
+        ranklastyear = self.notering.set_index(['SongID', 'Year'])
+            .unstack().stack(dropna=False)
+            .groupby('SongID')['Rank'].shift()
+            )
+        
+        return df.merge(ranklastyear, how='left', right_index=True, validate='many_to_one')
 
     def _song_features(self, df):
 
         df = (df.assign(NrArtists = lambda df: df.groupby(['SongID', 'Year'])['Rank'].transform('count'),
                         YearsSinceOverlijden = lambda df: df['Year'].sub(df['JaarTop2000']),
+                        PctVotes = lambda df: df['Rank'].apply(self.votesmodel.percentage_of_votes),
                        )
+                .pipe(self._add_rank_last_year)
                 .pipe(self._normalize_by_years_before_death)
              )
         return df
@@ -126,7 +128,8 @@ class AnalysisSetCreator:
     def _song_features_after_passing(self, df):
         df = (df.assign(Boost = lambda df: df['PctVotesAfterDeath'].div(df['PctVotesBeforeDeath']),
                         LogBoost = lambda df: np.log(df['Boost']),
-
+                        
+                        
                         PopularityWithinArtist = lambda df: (df.groupby('ArtistID')['PctVotesBeforeDeath']
                                                              .apply(lambda v: v.div(v.mean()))),
                         LogSongPopularityWithinArtist = lambda df: np.log10(df['PopularityWithinArtist']),
@@ -143,7 +146,6 @@ class AnalysisSetCreator:
 
     def create_analysis_set(self, filefolder):
         df = (self._combine_data(filefolder)
-                  .pipe(self._rank_features)
                   .pipe(self._song_features)
                   .query('YearsSinceOverlijden == 0')
                   .rename(columns={'PctVotes': 'PctVotesAfterDeath'})
