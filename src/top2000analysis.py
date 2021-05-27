@@ -20,11 +20,11 @@ class AnalysisSetCreator:
         self.votesmodel = votesmodels[votesmodel]
 
     def _combine_data(self, filefolder):
-        self.notering = pd.read_parquet(os.path.join(filefolder, 'notering.parquet'))
+        self.notering = pd.read_parquet(os.path.join(filefolder, 'ranking.parquet'))
         self.song = pd.read_parquet(os.path.join(filefolder, 'song.parquet'))
         self.songartist = pd.read_parquet(os.path.join(filefolder, 'songartist.parquet'))
         self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')) 
-                          .pipe(self._artist_features) # TODO: This should not happen here
+                          .pipe(self._artist_features, filefolder=filefolder) # TODO: This should not happen here
                         )
 
         df = (self.notering.merge(self.song, left_on='SongID', right_index=True)
@@ -34,7 +34,8 @@ class AnalysisSetCreator:
              )
         return df
 
-    def _read_stemperiodes(self, path=os.path.join('Data', 'EindeStemperiode.xlsx')):
+    def _read_stemperiodes(self, filefolder='Data'):
+        path = os.path.join(filefolder, 'EindeStemperiode.xlsx')
         einde_stemperiode = (pd.read_excel(path, engine='openpyxl')  # openpyxl does support xlsx
                                .dropna(subset=['EindeStemperiode'])
                                .drop(columns=['Bron'])
@@ -67,8 +68,8 @@ class AnalysisSetCreator:
         return df
 
 
-    def _artist_features(self, df):
-        einde_stemperiode = self._read_stemperiodes()
+    def _artist_features(self, df, filefolder='Data'):
+        einde_stemperiode = self._read_stemperiodes(filefolder)
         df = (df
                 .pipe(self._check_passed_away_during_top2000, einde_stemperiode)
                 .pipe(self._find_next_top2000_after_death, einde_stemperiode)
@@ -123,16 +124,19 @@ class AnalysisSetCreator:
         return df
 
     def _song_features_after_passing(self, df):
-        df = (df.assign(NrsBeforeDeath = lambda df: df.groupby('ArtistID')['ArtistID'].transform('count'),
+        df = (df.assign(Boost = lambda df: df['PctVotesAfterDeath'].div(df['PctVotesBeforeDeath']),
+                        LogBoost = lambda df: np.log(df['Boost']),
+
                         PopularityWithinArtist = lambda df: (df.groupby('ArtistID')['PctVotesBeforeDeath']
                                                              .apply(lambda v: v.div(v.mean()))),
                         LogSongPopularityWithinArtist = lambda df: np.log10(df['PopularityWithinArtist']),
+                        
                         RecencyWithinArtist = lambda df: (df.groupby('ArtistID')['YearMade']
                                                           .apply(lambda v: v.sub(v.min()).div(v.max() - v.min()))),
                         YearsBeforeDeath = lambda df: df['YearMade'].sub(df['JaarTop2000']),
-                        Boost = lambda df: df['PctVotes'].div(df['PctVotesBeforeDeath']),
-                        MultiplePerformers = lambda df: df['NrArtists'].gt(1).astype(int),
                         JarenGeleden = lambda df: df['JaarTop2000'].sub(df['JaarTop2000'].max()),
+                        
+                        MultiplePerformers = lambda df: df['NrArtists'].gt(1).astype(int),
                         )
              )
         return df
@@ -142,6 +146,7 @@ class AnalysisSetCreator:
                   .pipe(self._rank_features)
                   .pipe(self._song_features)
                   .query('YearsSinceOverlijden == 0')
+                  .rename(columns={'PctVotes': 'PctVotesAfterDeath'})
                   .query(f'PctVotesBeforeDeath > {self.votesmodel.lower_than_2000}')
                   .pipe(self._song_features_after_passing)
              )
@@ -155,21 +160,22 @@ class AnalysisSetCreator:
                    'Overlijdensdatum',
                    'EindeStemperiode',
                    ]
+
         df = self.create_analysis_set(filefolder)
         df_artist = (df.groupby('ArtistID')
-                        .agg({'PctVotes': 'sum',
-                              'PctVotesBeforeDeath': 'sum',
-                               'YearMade': 'last'
-                            }
+                        .agg(PctVotesAfterDeath = ('PctVotesAfterDeath', 'sum'),
+                             PctVotesBeforeDeath = ('PctVotesBeforeDeath', 'sum'),
+                             LastYearInTop2000 = ('YearMade', 'last'),
+                             NrsBeforeDeath = ('ArtistID', 'count')
                             )
                         .join(self.artist[columns])
                         .assign(DaysToStemperiode = lambda df: (df['Overlijdensdatum']
                                                                 .sub(df['EindeStemperiode']).dt.days),
-                                YearsSinceLastHit = lambda df: df['JaarTop2000'].sub(df['YearMade']),
+                                YearsSinceLastHit = lambda df: df['JaarTop2000'].sub(df['LastYearInTop2000']),
                                 LogPopularity = lambda df: np.log10(df['PctVotesBeforeDeath']),
                                 LogPopularityNorm = lambda df: (df['LogPopularity']
                                                                 .sub(df['LogPopularity'].median())),
-                                Boost = lambda df: df['PctVotes'].div(df['PctVotesBeforeDeath']),
+                                Boost = lambda df: df['PctVotesAfterDeath'].div(df['PctVotesBeforeDeath']),
                                 LogBoost = lambda df: np.log(df['Boost']),
                                 )
                     )
@@ -178,7 +184,16 @@ class AnalysisSetCreator:
     def create_full_feature_set(self, filefolder):
         df = self.create_analysis_set(filefolder)
         df_artist = self.create_artist_set(filefolder)
-        full_set = (df.merge(df_artist, left_on='ArtistID', right_index=True,
+        columns = ['Name',
+                   'IsDutch',
+                   'AgePassing',
+                   'JaarTop2000',
+                   'Overlijdensdatum',
+                   'EindeStemperiode',
+                   ]
+        
+        full_set = (df.drop(columns=columns)  # Use duplicate columns from artist
+                      .merge(df_artist, left_on='ArtistID', right_index=True,
                              suffixes=('Song', 'Artist'))
                       .assign(
                               SongRelativeBoost = lambda df: df['BoostSong'].div(df['BoostArtist']),

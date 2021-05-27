@@ -203,6 +203,7 @@ class Top2000Cleaner:
                           'ArtiestLinks': 'ArtistLinks',
                           }
         self.data = self.data.rename(columns = column_rename)
+        
     def split_into_model(self):
         '''
         Split data into tables according to data model
@@ -211,7 +212,7 @@ class Top2000Cleaner:
         self.data['SongID'] = (self.data[['Title', 'Artist']].applymap(lambda x: x.lower())
                                .apply(lambda x: hash(tuple(x)), axis=1)
                                )
-        self.notering = self.data[['SongID'] + [col for col in self.data.columns if col.isnumeric()]]
+        self.ranking = self.data[['SongID'] + [col for col in self.data.columns if col.isnumeric()]]
         self.song = self.data.set_index('SongID')[['Title', 'YearMade', 'TitleLink']]
 
         exploded = self.data.explode('ArtistLinks')
@@ -227,10 +228,10 @@ class Top2000Cleaner:
                       .rename(columns={'ArtistLink': 'Link'})
                       )
         self.artist = self.artist[~self.artist.index.duplicated(keep='first')]
-        return self.notering, self.song, self.songartist, self.artist
+        return self.ranking, self.song, self.songartist, self.artist
 
-    def clean_notering(self):
-        self.notering = (self.notering.melt(id_vars=['SongID'], var_name='Year', value_name='Rank')
+    def clean_ranking(self):
+        self.ranking = (self.ranking.melt(id_vars=['SongID'], var_name='Year', value_name='Rank')
                                      .assign(Year = lambda df: (df['Year'].astype(int)
                                                                 .add(2000)
                                                                 .mask(lambda s: s.ge(2050),
@@ -243,8 +244,8 @@ class Top2000Cleaner:
                                      .dropna()
                                      )
 
-    def validate_notering(self):
-        assert (self.notering.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()        
+    def validate_ranking(self):
+        assert (self.ranking.groupby('Year')['Rank'].apply(set) == set(range(1, 2001))).all()        
 
     def clean_song(self):
         self.song = (self.song.rename(columns={'TitleLink': 'Link'})
@@ -254,10 +255,10 @@ class Top2000Cleaner:
     def clean(self):
         self.rename_columns()
         self.split_into_model()
-        self.clean_notering()
-        self.validate_notering()
+        self.clean_ranking()
+        self.validate_ranking()
         self.clean_song()
-        return self.notering, self.song, self.songartist, self.artist
+        return self.ranking, self.song, self.songartist, self.artist
 
 class InfoboxReader:
     def __init__(self, link, allow_errors=False):
@@ -310,7 +311,6 @@ class Top2000Downloader:
     # Wikipedia redirects Anita Garbo to her song, instead of a page about her as an artist
     # Wikipedia does have an infobox for Space Monkey, but it is about their song, not about them as an artist
     ignored_artists = ['Anita Garbo',  
-                       
                        'Space Monkey',  
                       ]
     
@@ -321,8 +321,8 @@ class Top2000Downloader:
     
     def _clean(self, df):
         cleaner = Top2000Cleaner(df)
-        notering, song, songartist, artist = cleaner.clean()
-        return notering, song, songartist, artist
+        ranking, song, songartist, artist = cleaner.clean()
+        return ranking, song, songartist, artist
     
     def _download_infobox_details(self, links):
         result = []
@@ -344,10 +344,7 @@ class Top2000Downloader:
         # in what bands they were active
         extra_artist_details = (artist_details[~artist_details['Header'].isin(['Leden', 'Oud-leden', 'Bezetting'])
                                                & ~artist_details['Header'].str.startswith('Actief')]  
-                                .set_index(['OriginalLink', 'Variable'])['Value'].unstack()
-                                .assign(
-                                        )
-
+                                .set_index(['OriginalLink', 'Variable'])['Value'].unstack()\
                                )
         artist_full = artist.merge(extra_artist_details, left_on='Link', right_index=True, how='left')
         return artist_full
@@ -378,10 +375,10 @@ class Top2000Downloader:
         return artist
                   
     def download_and_write(self):
-        notering, song, songartist, artist = self._read_full_list().pipe(self._clean)
+        ranking, song, songartist, artist = self._read_full_list().pipe(self._clean)
         artist = self._add_detailed_information(artist).pipe(self._artist_feature_engineering)
         
-        tables = {'notering': notering,
+        tables = {'ranking': ranking,
                   'song': song,
                   'songartist': songartist,
                   'artist': artist,

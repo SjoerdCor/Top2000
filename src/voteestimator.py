@@ -15,6 +15,7 @@ class VotesEstimator:
         try:
             return self.position_votes[position]
         except KeyError:
+            # nr_votes = max(self._calculate_position_votes(position), 0)
             nr_votes = self._calculate_position_votes(position)
             self.position_votes[position] = nr_votes
             return nr_votes
@@ -37,7 +38,7 @@ class MeindertsmaVotesEstimator(VotesEstimator):
 
     def _calculate_position_votes(self, position):
 
-        nr_votes = self.votes_first_place / (1 + ( (position - 1) / self.diff_factor))
+        nr_votes = self.votes_first_place / (1 + ((position - 1) / self.diff_factor))
         return nr_votes
 
 class ExponentialVotesEstimator(VotesEstimator):
@@ -67,4 +68,23 @@ class LinearVotesEstimator(VotesEstimator):
         super().__init__()
 
     def _calculate_position_votes(self, position):
-        return self.b - self.a * position
+        return self.b + self.a * position
+
+class GeneralizedVotesEstimator(VotesEstimator):
+    """
+    Calculate the number of votes at a certain position of the Top 2000 according to
+    a model developed by Peter Meindertsma
+
+    Source: https://www.petermeindertsma.nl/blog/benadering-aantal-stemmen-per-liedje-in-de-top-2000-van-2014/
+    """
+
+    def __init__(self, votes_first_place=10000, diff_factor=30, rho=1):
+        self.votes_first_place = votes_first_place
+        self.diff_factor = diff_factor
+        self.rho = rho
+        super().__init__()
+
+    def _calculate_position_votes(self, position):
+
+        nr_votes = self.votes_first_place / ((1 + ((position - 1) / self.diff_factor)) ** self.rho)
+        return nr_votes
