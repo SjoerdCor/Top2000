@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri May 28 08:23:34 2021
-
 @author: Gebruiker
 """
 
-class TableExtractor:
+from typing import Iterable
+import locale
 
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import numpy as np
+
+
+class TableExtractor:
     def __init__(self, link: str,
                  single_link_columns: Iterable[int] = None,
                  multiple_link_columns: Iterable[int] = None,
@@ -49,7 +55,7 @@ class TableExtractor:
     def get_html_soup(self):
         response = requests.get(self.link)
         html = response.content
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(html, 'html.parser')
         for br in soup.find_all("br"):
             br.replace_with(", " + br.text)
 
@@ -97,7 +103,7 @@ class TableExtractor:
             cells = tablerow.findAll("td")
             if not cells:  # header
                 continue
-            
+
             for i in self.single_link_columns:
                 try:
                     cell = cells[i]
@@ -174,9 +180,9 @@ class InfoboxReader:
         self.link = link
         self.details = None
         self.allow_errors = allow_errors
-    
+
     def download(self):
-        reader = WikipediaTableExtractor(self.link, [1], attrs={'class': 'infobox'})
+        reader = TableExtractor(self.link, [1], attrs={'class': 'infobox'})
         try:
             artist_details = reader.extract_table_as_dataframe()
         except ValueError as e:  # No table found
@@ -187,7 +193,7 @@ class InfoboxReader:
         assert artist_details.columns.tolist() == [0, 1, 2, '1Link']
         self.details = artist_details
         return self.details
-    
+
     def clean(self):
         if self.details is None:
             self.download()
@@ -209,7 +215,8 @@ class InfoboxReader:
                                            )
                                       .loc[lambda df: df['Variable'] != df['Value']]
                                  )
-    
+        return self.details
+
     def read(self):
         self.download()
         self.clean()
@@ -221,4 +228,3 @@ def wikipedia_datetime_to_datetime(series):
     locale.setlocale(locale.LC_TIME, 'nl_NL.utf8')
 
     return pd.to_datetime(series, errors='coerce', format='%d %B %Y', exact=False)
-
