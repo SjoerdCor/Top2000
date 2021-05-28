@@ -18,14 +18,17 @@ class AnalysisSetCreator:
                       'Linear': voteestimator.LinearVotesEstimator(),
                       }
         self.votesmodel = votesmodels[votesmodel]
+        self._read_base_tables()
 
-    def _combine_data(self, filefolder):
+    def _read_base_tables(self, filefolder):
         self.ranking = pd.read_parquet(os.path.join(filefolder, 'ranking.parquet'))
         self.song = pd.read_parquet(os.path.join(filefolder, 'song.parquet'))
         self.songartist = pd.read_parquet(os.path.join(filefolder, 'songartist.parquet'))
         self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')) 
-                          .pipe(self._artist_features, filefolder=filefolder) # TODO: This should not happen here
+                           .pipe(self._artist_features, filefolder=filefolder)  #TODO Should this happen here?
                         )
+
+    def _combine_data(self, filefolder):
 
         df = (self.ranking.merge(self.song, left_on='SongID', right_index=True)
                           .merge(self.songartist.reset_index())
@@ -70,13 +73,30 @@ class AnalysisSetCreator:
 
     def _artist_features(self, df, filefolder='Data'):
         einde_stemperiode = self._read_stemperiodes(filefolder)
+        
+        columns_possible_country_of_birth = ['Oorsprong',
+                                     'Land',
+                                     'Land van oorsprong',
+                                     'Geboorteland',
+                                     'Geboorteplaats',
+                                     'Nationaliteit'
+                                    ]
+        artist = (artist.assign(
+                                ,
+                               )
+                  )
+
         df = (df.pipe(self._check_passed_away_during_top2000, einde_stemperiode)
                 .pipe(self._find_next_top2000_after_death, einde_stemperiode)
                 .assign(AgePassing = lambda df: (df['Overlijdensdatum']
                                                  .sub(df['Geboortedatum']).dt.days
                                                  .div(365.25)),
                         PassingTooEarly = lambda df: df['AgePassing'].sub(80).mul(-1).clip(lower=0),
-                        IsDutch = lambda df: df['IsDutch'].astype(int),
+                        IsDutch = lambda df: IsDutch = lambda df: (df[columns_possible_country_of_birth]
+                                                                   .apply(lambda c: c.str.lower()
+                                                                   .str.contains('nederland')).any('columns')
+                                                                   .astype(int)
+                                                                   ),
                         )
              )
         return df
@@ -104,15 +124,20 @@ class AnalysisSetCreator:
                              .rename('PctVotesBeforeDeath')
                              )
 
-        df = df.merge(votes_before_death, right_index=True, how='left', validate='many_to_one')
+        df = df.merge(votes_before_death, how='left',
+                      left_on=['SongID', 'ArtistID'],  right_index=True,
+                      validate='many_to_one')
         return df
     def _add_rank_last_year(self, df):
-        ranklastyear = self.notering.set_index(['SongID', 'Year'])
-            .unstack().stack(dropna=False)
-            .groupby('SongID')['Rank'].shift()
-            )
-        
-        return df.merge(ranklastyear, how='left', right_index=True, validate='many_to_one')
+        ranklastyear = (self.ranking.set_index(['SongID', 'Year'])
+                            .unstack().stack(dropna=False)
+                            .groupby('SongID')['Rank'].shift()
+                            .rename('RankLastYear')
+                            )
+        df = df.merge(ranklastyear, how='left',
+                      left_on=['SongID', 'Year'], right_index=True,
+                      validate='many_to_one')
+        return df
 
     def _song_features(self, df):
 
