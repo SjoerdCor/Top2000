@@ -10,14 +10,14 @@ import pandas as pd
 import voteestimator
 
 class AnalysisSetCreator:
+    votesmodels = {'Meindertsma': voteestimator.MeindertsmaVotesEstimator,
+                   'Exponential': voteestimator.ExponentialVotesEstimator,
+                   'Linear': voteestimator.LinearVotesEstimator,
+                   }
 
     def __init__(self, filefolder, votesmodel='Meindertsma'):
 
-        votesmodels = {'Meindertsma': voteestimator.MeindertsmaVotesEstimator(),
-                      'Exponential': voteestimator.ExponentialVotesEstimator(),
-                      'Linear': voteestimator.LinearVotesEstimator(),
-                      }
-        self.votesmodel = votesmodels[votesmodel]
+        self.votesmodel = self.votesmodels[votesmodel]()
         self._read_base_tables(filefolder)
 
         self.analysis_song = None
@@ -31,7 +31,7 @@ class AnalysisSetCreator:
         self.artist = (pd.read_parquet(os.path.join(filefolder, 'artist.parquet')))
         self.artist_incl_features = self.artist.pipe(self._artist_features, filefolder)
 
-    def _combine_data(self, artist_features=False):
+    def combine_data(self, artist_features=False):
 
         artist = self.artist_incl_features if artist_features else self.artist
 
@@ -43,17 +43,17 @@ class AnalysisSetCreator:
         return df
 
     def _read_stemperiodes(self, filefolder='Data'):
-        path = os.path.join(filefolder, 'EindeStemperiode.xlsx')
+        path = os.path.join(filefolder, 'VotingPeriod.xlsx')
         einde_stemperiode = (pd.read_excel(path, engine='openpyxl')  # openpyxl does support xlsx
-                               .dropna(subset=['EindeStemperiode'])
-                               .drop(columns=['Bron'])
-                               .sort_values('EindeStemperiode')
+                               .dropna(subset=['DateEndOfVoting'])
+                               .drop(columns=['Source'])
+                               .sort_values('DateEndOfVoting')
                             )
         return einde_stemperiode
 
 
     def _check_passed_away_during_top2000(self, df, top2000_stemperiodes):
-        first_stemperiode = top2000_stemperiodes['EindeStemperiode'].min()
+        first_stemperiode = top2000_stemperiodes['DateEndOfVoting'].min()
         relevant_date_of_death = first_stemperiode + pd.Timedelta('365 days')
         df['HasPassed'] = df['DateOfDeath'].ge(relevant_date_of_death)
         return df
@@ -68,9 +68,9 @@ class AnalysisSetCreator:
         passed_away_during_top2000 = (pd.merge_asof(passed_away_during_top2000,
                                                     top2000_stemperiodes,
                                                     left_on='DateOfDeath',
-                                                    right_on='EindeStemperiode',
+                                                    right_on='DateEndOfVoting',
                                                     direction='forward')
-                                     .rename(columns={'JaarTop2000': 'Top2000YearOfDeath'})
+                                     .rename(columns={'YearTop2000': 'Top2000YearOfDeath'})
                                      .set_index('ArtistID')
                                      )
         df = pd.concat([not_passed_away_during_top_2000, passed_away_during_top2000], sort=False)
@@ -99,7 +99,7 @@ class AnalysisSetCreator:
                                                                 .str.contains('nederland'))
                                               .any('columns').astype(int)
                                               ),
-                        DaysToEndOfVoting = lambda df: (df['DateOfDeath'].sub(df['EindeStemperiode']).dt.days),
+                        DaysToEndOfVoting = lambda df: (df['DateOfDeath'].sub(df['DateEndOfVoting']).dt.days),
                         )
              )
         return df
@@ -146,8 +146,8 @@ class AnalysisSetCreator:
 
     def _song_features(self, df):
         df = df.assign(PctVotes = lambda df: df['Rank'].apply(self.votesmodel.percentage_of_votes))
-        
-        
+
+
         # Doing this beforehand instead of in an `apply` speeds up 20x
         avgpctvotesartist = df.groupby(['ArtistID', 'Year'])['PctVotes'].transform('mean')
         earliesttop2000song = df.groupby(['ArtistID', 'Year'])['YearMade'].transform('min')
@@ -181,7 +181,7 @@ class AnalysisSetCreator:
         return df
 
     def create_analysis_set(self):
-        df = (self._combine_data(artist_features=True)
+        df = (self.combine_data(artist_features=True)
                   .pipe(self._song_features)
                   .query('YearsSinceOverlijden == 0')
                   .rename(columns={'PctVotes': 'PctVotesAfterDeath'})
@@ -197,7 +197,7 @@ class AnalysisSetCreator:
                    'AgePassing',
                    'Top2000YearOfDeath',
                    'DateOfDeath',
-                   'EindeStemperiode',
+                   'DaysToEndOfVoting',
                    ]
         if self.analysis_song is None:
             self.create_analysis_set()
@@ -205,7 +205,7 @@ class AnalysisSetCreator:
                                        .agg(PctVotesAfterDeath = ('PctVotesAfterDeath', 'sum'),
                                             PctVotesBeforeDeath = ('PctVotesBeforeDeath', 'sum'),
                                             LastSongYearInTop2000 = ('YearMade', 'last'),
-                                            NrsBeforeDeath = ('ArtistID', 'count')
+                                            NSongsBeforeDeath = ('ArtistID', 'count')
                                             )
                                        .join(self.artist_incl_features[columns])
                                        .assign(LogPopularity = lambda df: np.log10(df['PctVotesBeforeDeath']),
@@ -228,7 +228,7 @@ class AnalysisSetCreator:
                    'AgePassing',
                    'Top2000YearOfDeath',
                    'DateOfDeath',
-                   'EindeStemperiode',
+                   'DaysToEndOfVoting',
                    ]
         if self.analysis_song is None:
             self.create_analysis_set()
@@ -241,106 +241,8 @@ class AnalysisSetCreator:
                                              suffixes=('Song', 'Artist'))
                                       .assign(
                                               SongRelativeBoost = lambda df: df['BoostSong'].div(df['BoostArtist']),
-                                              LogRelativeBoost = lambda df: np.log2(df['SongRelativeBoost']),
+                                              LogRelativeBoost = lambda df: np.log(df['SongRelativeBoost']),
                                               LogBoost = lambda df: np.log(df['BoostSong']),
                                              )
            )
         return full_set
-
-
-class BoostExplainer:
-
-    def __init__(self, parameters, idata):
-        self.parameters = parameters
-        self.idata = idata
-        self.df_songs = idata.constant_data.to_dataframe().reset_index().query('Artist == artist_idx')
-        self.artist_boost = idata.posterior['za_artist'].to_dataframe().median(level='Artist')
-
-    def _get_song(self, ix):
-        song = self.df_songs.query('obs_id == @ix').squeeze().to_dict()
-        return song
-
-    def _calculate_artist_effect(self, song):
-        base_boost = np.exp(self.parameters['a'])
-        history_effect = np.exp(self.parameters['history_effect'] * song['jaren_geleden'] )
-        recency_effect = np.exp((np.exp(10**self.parameters['recency_effect_exponent'] * song['days_to_stemperiode'])
-                                 - np.exp(10**self.parameters['recency_effect_exponent'] * -365))
-                                * self.parameters['max_recency_effect'])
-        popularity_effect = np.exp(self.parameters['effect_popularity'] * song['logpopularity'])
-        dutch_effect = np.exp(self.parameters['is_dutch_effect'] * song['is_dutch'])
-        age_effect = np.exp(self.parameters['age_passing_effect'] * song['passing_too_early'])
-
-        artist_idx = song['artist_idx']
-        artist_magic = np.exp(self.parameters['sigma_a'] * self.artist_boost.loc[artist_idx].values[0])
-        effects = {
-                    'Base': base_boost,
-                    'History': history_effect,
-                    'Popularity': popularity_effect,
-                    'Dutch': dutch_effect,
-                    'PassingTooEarly': age_effect,
-                    'Recency': recency_effect,
-                    'ArtistMagic': artist_magic
-                    }
-        return effects
-
-
-    def all_effects(self, song_idx, difference=False, idata=None):
-        song = self._get_song(song_idx)
-        effects_artist = self._calculate_artist_effect(song)
-        effects_song = self._calculate_song_effects(song)
-        effects = (pd.concat([pd.concat({'Artist': pd.Series(effects_artist)}),
-                            pd.concat({'Song': pd.Series(effects_song)})])
-                   .rename('EffectSize')
-                  .to_frame()
-                  )
-        if difference:
-            effects.loc[('Prediction', ''), 'EffectSize'] = 1
-            effects.loc[('FinalDifference', ''), 'EffectSize'] = self.get_factor_off(song_idx, idata)
-        return effects
-
-    def _calculate_song_effects(self, song):
-        oeuvre_effect = np.exp(self.parameters['within_oeuvre_effect'] * song['popularity_within_oeuvre'])
-        sharing_effect = np.exp(self.parameters['sharing_effect'] * song['multiple_performers'])
-        effects = {
-                    'WithinOeuvrePopularity': oeuvre_effect,
-                    'MultiplePerformers': sharing_effect
-                    }
-        return effects
-
-    def _print_effects(self, effects, starting_point=1):
-        effect = starting_point
-        for name, size in effects.items():
-            effect *= size
-            print(f'The effect is {effect:.2f} after {name} - distinct effect: {size:.2f}')
-
-    def explain(self, song):
-        """
-        Explain the boost of a song
-
-        Parameters
-        ----------
-        song: int or str
-            int: the index of the song in df
-            str: the title of the song (must be unique)
-        """
-        song = self._get_song(song)
-        print('\033[1m' + f"{song.loc['Title']} by {song.loc['NameArtist']}" + '\033[0m')  # Using bold face
-        effects_artist = self._calculate_artist_effect(song)
-        total_artist_effect = np.prod(list(effects_artist.values()))
-        effects_song = self._calculate_song_effects(song)
-        self._print_effects(effects_artist)
-        print('-')
-        self._print_effects(effects_song, total_artist_effect)
-        print('')
-        print(f'The actual boost was {song.loc["BoostSong"]:.2f}')
-
-    def get_factor_off(self, song, idata):
-        boost = np.exp(idata.observed_data['y_like'].values[song])
-        predicted_boost = self.all_effects(song)['EffectSize'].prod()
-        factor = boost / predicted_boost
-        return factor
-#%%
-import os
-FOLDER_DATA = os.path.join('..', 'Data')
-a = AnalysisSetCreator(FOLDER_DATA)
-a.create_artist_set()
